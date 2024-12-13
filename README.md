@@ -1,3 +1,4 @@
+blog: https://moreality.net/posts/5672/
 
 - `claude_desktop_config.json`
 

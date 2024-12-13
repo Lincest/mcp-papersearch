@@ -2,6 +2,7 @@
 from typing import Any, List, Dict
 import asyncio
 import arxiv
+import re
 from datetime import datetime, timezone, timedelta
 from mcp.server.models import InitializationOptions
 import mcp.types as types
@@ -18,7 +19,7 @@ async def search_papers(days: int = 7, query_type: str = "moe", max_results: int
     
     Args:
         days: 搜索最近几天的论文
-        query_type: 搜索类型 (默认为 moe)
+        query_type: 搜索类型 (默认为 moe) 或 arxiv ID
         max_results: 返回结果的最大数量
         field: 研究领域
         keywords: 标题或摘要中的关键词列表
@@ -46,11 +47,30 @@ async def search_papers(days: int = 7, query_type: str = "moe", max_results: int
             
         return score / total_weight if total_weight > 0 else 0
 
+    client = arxiv.Client()
+
+    # 检查是否是 arxiv ID 格式
+    arxiv_id_pattern = r'\d{4}\.\d{4,5}(?:v\d+)?'
+    if query_type and re.match(arxiv_id_pattern, query_type):
+        try:
+            paper = next(client.results(arxiv.Search(id_list=[query_type])))
+            return [{
+                'title': paper.title,
+                'authors': [str(author) for author in paper.authors],
+                'summary': paper.summary,
+                'url': paper.pdf_url,
+                'published_date': paper.published.strftime('%Y-%m-%d'),
+                'categories': paper.categories,
+                'relevance_score': 1.0  # 精确匹配的论文相关性设为1
+            }]
+        except StopIteration:
+            return []  # 如果找不到指定 ID 的论文，返回空列表
+    
     # 构建查询语句
     query_parts = []
     
     # 添加原有的 MOE 相关查询
-    if query_type == "moe":
+    if query_type == "moe inference":
         query_parts.append('(ti:"mixture of experts" OR ti:moe) AND (ti:deployment OR abs:deployment OR ti:inference OR abs:inference OR ti:efficient OR abs:efficient)')
     elif query_type:
         query_parts.append(query_type)
@@ -72,7 +92,6 @@ async def search_papers(days: int = 7, query_type: str = "moe", max_results: int
     # 组合所有查询条件
     final_query = " AND ".join(query_parts) if query_parts else "*:*"
         
-    client = arxiv.Client()
     search = arxiv.Search(
         query=final_query,
         max_results=max(100, max_results * 2),  # 获取更多结果用于排序
@@ -84,7 +103,7 @@ async def search_papers(days: int = 7, query_type: str = "moe", max_results: int
     
     papers = []
     for paper in client.results(search):
-        if paper.published >= cutoff_date:
+        if len(keywords) > 0 or paper.published >= cutoff_date:
             paper_dict = {
                 'title': paper.title,
                 'authors': [str(author) for author in paper.authors],
@@ -146,11 +165,11 @@ async def handle_list_tools() -> list[types.Tool]:
                     "days": {
                         "type": "number",
                         "description": "要搜索的时间范围（天数）",
-                        "default": 90
+                        "default": 180
                     },
                     "query_type": {
                         "type": "string",
-                        "description": "搜索类型 (默认为 moe)",
+                        "description": "搜索类型 (默认为 moe), 或直接传入 arxiv ID (例如 2103.03404)",
                         "default": "moe"
                     },
                     "max_results": {
